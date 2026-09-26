@@ -2,9 +2,33 @@ let allPrizes = [];
 
         async function loadNobelPrizes() {
           try {
-            const res = await fetch('/api/nobel/prizes');
-            const data = await res.json();
-            if (!data.success) throw new Error(data.error);
+            // Standalone: Nobel Prize API doğrudan (CORS-açık) + istemci taraflı normalize
+            const res = await fetch('https://api.nobelprize.org/2.1/nobelPrizes?limit=40');
+            if (!res.ok) throw new Error('Nobel Vakfı API yanıt vermedi');
+            const raw = await res.json();
+
+            const formatted = (raw.nobelPrizes || []).map(p => {
+              const laureates = (p.laureates || []).map(l => ({
+                id: l.id,
+                name: (l.knownName && l.knownName.en) || (l.orgName && l.orgName.en) || 'İsimsiz',
+                motivation: (l.motivation && l.motivation.en) || (p.topMotivation && p.topMotivation.en) || 'İnsanlığa üstün katkı.'
+              }));
+              return {
+                year: p.awardYear,
+                category: (p.category && p.category.en) || '',
+                categoryFullName: (p.categoryFullName && p.categoryFullName.en) || '',
+                prizeAmount: p.prizeAmount || 0,
+                laureates
+              };
+            });
+
+            // Türk Nobel Kazananlarını arşivde sabitle (Aziz Sancar, Orhan Pamuk)
+            const turkishLaureates = [
+              { year: '2015', category: 'Chemistry', categoryFullName: 'The Nobel Prize in Chemistry', prizeAmount: 8000000, laureates: [{ id: '921', name: 'Aziz Sancar', motivation: 'For mechanistic studies of DNA repair (Hasarlı DNA onarım mekanizması keşfi).' }] },
+              { year: '2006', category: 'Literature', categoryFullName: 'The Nobel Prize in Literature', prizeAmount: 10000000, laureates: [{ id: '808', name: 'Orhan Pamuk', motivation: 'Who in the pursuit of the melancholic soul of his native city has discovered new symbols for the clash and interlacing of cultures.' }] }
+            ];
+
+            const data = { success: true, prizes: [...turkishLaureates, ...formatted] };
 
             allPrizes = data.prizes || [];
             document.getElementById('nobel-count-badge').innerText = allPrizes.length;
