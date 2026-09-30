@@ -1,36 +1,58 @@
 let allPrizes = [];
 
+        // Batch render durumu (682 kaydı tek seferde basmamak için)
+        const RENDER_BATCH = 60;
+        let filteredPrizes = [];
+        let renderBatch = RENDER_BATCH;
+
         async function loadNobelPrizes() {
           try {
-            // Standalone: Nobel Prize API doğrudan (CORS-açık) + istemci taraflı normalize
-            const res = await fetch('https://api.nobelprize.org/2.1/nobelPrizes?limit=40');
-            if (!res.ok) throw new Error('Nobel Vakfı API yanıt vermedi');
-            const raw = await res.json();
+            // NA1: tüm arşivi sayfalarla çek — API meta.count ≈ 682, limit maks 100, offset sayfalama
+            const firstRes = await fetch('https://api.nobelprize.org/2.1/nobelPrizes?limit=100&offset=0');
+            if (!firstRes.ok) throw new Error('Nobel Vakfı API yanıt vermedi');
+            const first = await firstRes.json();
+            const total = (first.meta && Number(first.meta.count)) || 0;
 
-            const formatted = (raw.nobelPrizes || []).map(p => {
-              const laureates = (p.laureates || []).map(l => ({
-                id: l.id,
-                name: (l.knownName && l.knownName.en) || (l.orgName && l.orgName.en) || 'İsimsiz',
-                motivation: (l.motivation && l.motivation.en) || (p.topMotivation && p.topMotivation.en) || 'İnsanlığa üstün katkı.'
-              }));
-              return {
+            const offsets = [];
+            for (let off = 100; off < total; off += 100) offsets.push(off);
+            const rest = await Promise.allSettled(
+              offsets.map(off =>
+                fetch(`https://api.nobelprize.org/2.1/nobelPrizes?limit=100&offset=${off}`).then(r => r.json())
+              )
+            );
+
+            const rawList = [...(first.nobelPrizes || [])];
+            for (const r of rest) {
+              if (r.status === 'fulfilled' && r.value && r.value.nobelPrizes) {
+                rawList.push(...r.value.nobelPrizes);
+              }
+            }
+
+            // yıl+kategoriye göre tekilleştir, en yeniden eskiye sırala
+            const seen = new Set();
+            allPrizes = rawList
+              .filter(p => {
+                const key = p.awardYear + '|' + (p.category && p.category.en);
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+              })
+              .map(p => ({
                 year: p.awardYear,
                 category: (p.category && p.category.en) || '',
                 categoryFullName: (p.categoryFullName && p.categoryFullName.en) || '',
                 prizeAmount: p.prizeAmount || 0,
-                laureates
-              };
-            });
+                laureates: (p.laureates || []).map(l => ({
+                  id: l.id,
+                  name: (l.knownName && l.knownName.en) || (l.orgName && l.orgName.en) || 'İsimsiz',
+                  motivation: (l.motivation && l.motivation.en) || (p.topMotivation && p.topMotivation.en) || 'İnsanlığa üstün katkı.'
+                }))
+              }))
+              .sort((a, b) => Number(b.year) - Number(a.year) || String(a.category).localeCompare(String(b.category)));
 
-            // Türk Nobel Kazananlarını arşivde sabitle (Aziz Sancar, Orhan Pamuk)
-            const turkishLaureates = [
-              { year: '2015', category: 'Chemistry', categoryFullName: 'The Nobel Prize in Chemistry', prizeAmount: 8000000, laureates: [{ id: '921', name: 'Aziz Sancar', motivation: 'For mechanistic studies of DNA repair (Hasarlı DNA onarım mekanizması keşfi).' }] },
-              { year: '2006', category: 'Literature', categoryFullName: 'The Nobel Prize in Literature', prizeAmount: 10000000, laureates: [{ id: '808', name: 'Orhan Pamuk', motivation: 'Who in the pursuit of the melancholic soul of his native city has discovered new symbols for the clash and interlacing of cultures.' }] }
-            ];
+            // Not: Sabit Türk kayıtları kaldırıldı — tam veri setinde gerçek kayıtlar mevcut
+            // (Orhan Pamuk 2006 Literature id 808, Aziz Sancar 2015 Chemistry id 923).
 
-            const data = { success: true, prizes: [...turkishLaureates, ...formatted] };
-
-            allPrizes = data.prizes || [];
             document.getElementById('nobel-count-badge').innerText = allPrizes.length;
 
             document.getElementById('nobel-loading').classList.add('hidden');
@@ -54,7 +76,14 @@ let allPrizes = [];
             return matchCat && matchQ;
           });
 
+          filteredPrizes = list;
+          renderBatch = RENDER_BATCH;
           renderGrid(list);
+        }
+
+        function showMoreNobel() {
+          renderBatch += RENDER_BATCH;
+          renderGrid(filteredPrizes);
         }
 
         function quickNobel(term) {
@@ -69,7 +98,8 @@ let allPrizes = [];
             return;
           }
 
-          grid.innerHTML = list.map(p => {
+          const visible = list.slice(0, renderBatch);
+          grid.innerHTML = visible.map(p => {
             const laureatesHtml = (p.laureates || []).map(l => `
               <div class="p-3 rounded-lg bg-mistral-cream/50 border border-mistral-beige-deep/80 space-y-1">
                 <h4 class="font-bold text-sm font-editorial text-mistral-ink flex items-center gap-1.5">
@@ -107,6 +137,14 @@ let allPrizes = [];
               </div>
             `;
           }).join('');
+
+          if (list.length > renderBatch) {
+            grid.innerHTML += `
+              <button onclick="showMoreNobel()" class="col-span-full mx-auto px-6 py-3 rounded-xl bg-white border border-mistral-hairline hover:border-mistral-orange/40 text-sm font-bold text-mistral-ink transition">
+                ${list.length - renderBatch} kaydı daha göster ▾
+              </button>
+            `;
+          }
         }
 
         document.addEventListener('DOMContentLoaded', loadNobelPrizes);
